@@ -1,4 +1,17 @@
-# SRE-Powered Microservices Architecture (Enterprise Standards)
+<h1 align="center">🧩 SRE-Powered Microservices Architecture</h1>
+<p align="center">Arquitetura de microsserviços moderna, resiliente e observável — padrões de engenharia de elite para alta escala.</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/SRE-Production_First-2E6CA4?style=flat"/>
+  <img src="https://img.shields.io/badge/Python-3776AB?style=flat&logo=python&logoColor=white"/>
+  <img src="https://img.shields.io/badge/Docker-2496ED?style=flat&logo=docker&logoColor=white"/>
+  <img src="https://img.shields.io/badge/Redis-DC382D?style=flat&logo=redis&logoColor=white"/>
+  <img src="https://img.shields.io/badge/Prometheus-E6522C?style=flat&logo=prometheus&logoColor=white"/>
+  <img src="https://img.shields.io/badge/Grafana-F46800?style=flat&logo=grafana&logoColor=white"/>
+</p>
+
+---
+
 
 Este projeto demonstra como construir uma arquitetura de microsserviços moderna, resiliente e observável, utilizando padrões de engenharia de elite para ambientes de alta escala.
 

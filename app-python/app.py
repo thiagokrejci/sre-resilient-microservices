@@ -9,7 +9,7 @@ import redis
 from flask import Flask, jsonify, request, g
 from datetime import datetime
 from pythonjsonlogger import jsonlogger
-from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
+from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
@@ -51,6 +51,45 @@ cache = redis.Redis(host=REDIS_HOST, port=6379, decode_responses=True, socket_ti
 REQUEST_COUNT = Counter('http_requests_total', 'Volume total de tráfego', ['method', 'endpoint', 'status'])
 LATENCY = Histogram('http_request_duration_seconds', 'Distribuição de latência (p95/p99)', ['endpoint'])
 CACHE_METRICS = Counter('cache_operations_total', 'Saúde e performance do cache', ['result'])
+# Saturação (4º Golden Signal): requisições simultâneas em andamento.
+INFLIGHT = Gauge('http_inflight_requests', 'Requisições em andamento (saturação)')
+BREAKER_STATE = Gauge('circuit_breaker_open', '1 quando o circuit breaker está aberto')
+
+
+# --- CIRCUIT BREAKER (máquina de estados: closed -> open -> half_open) ---
+# Diferente de um fallback simples, o breaker PARA de bater na dependência doente
+# após N falhas consecutivas (estado 'open'), evitando efeito cascata e dando tempo
+# de recuperação. Após o cooldown, deixa passar 1 tentativa de teste (estado 'half_open').
+class CircuitBreaker:
+    def __init__(self, fail_max=3, reset_timeout=15):
+        self.fail_max = fail_max
+        self.reset_timeout = reset_timeout
+        self.failures = 0
+        self.state = 'closed'
+        self.opened_at = 0.0
+
+    def allow(self):
+        if self.state == 'open':
+            if time.time() - self.opened_at >= self.reset_timeout:
+                self.state = 'half_open'  # libera 1 tentativa de teste
+                return True
+            return False
+        return True
+
+    def record_success(self):
+        self.failures = 0
+        self.state = 'closed'
+        BREAKER_STATE.set(0)
+
+    def record_failure(self):
+        self.failures += 1
+        if self.state == 'half_open' or self.failures >= self.fail_max:
+            self.state = 'open'
+            self.opened_at = time.time()
+            BREAKER_STATE.set(1)
+
+
+breaker = CircuitBreaker(fail_max=3, reset_timeout=15)
 
 # --- SEGURANÇA: HARDENING DE HEADERS ---
 # Proteções básicas contra XSS, Sniffing e Clickjacking.
@@ -67,6 +106,15 @@ def apply_security_headers(response):
 def before_request():
     g.request_id = request.headers.get('X-Request-ID', str(uuid.uuid4()))
     g.start_time = time.time()
+    g._inflight = True
+    INFLIGHT.inc()
+
+@app.teardown_request
+def teardown_request(exc=None):
+    # Decrementa a saturação só se a requisição chegou a entrar (evita gauge negativo
+    # quando o rate-limiter rejeita antes do before_request).
+    if getattr(g, '_inflight', False):
+        INFLIGHT.dec()
 
 @app.after_request
 def log_request(response):
@@ -89,18 +137,25 @@ def get_data_with_fallback(key, ttl, generator_func):
     """
     if not ENABLE_CACHE:
         return generator_func(), 'disabled'
+    # Circuit breaker aberto: nem tenta o Redis, serve direto da origem (evita cascata).
+    if not breaker.allow():
+        CACHE_METRICS.labels(result='breaker_open').inc()
+        return generator_func(), 'fallback'
     try:
         cached = cache.get(key)
         if cached:
+            breaker.record_success()
             CACHE_METRICS.labels(result='hit').inc()
             return json.loads(cached), 'cache'
         CACHE_METRICS.labels(result='miss').inc()
         data = generator_func()
         cache.setex(key, ttl, json.dumps(data))
+        breaker.record_success()
         return data, 'app'
     except (redis.exceptions.ConnectionError, redis.exceptions.TimeoutError):
-        # Fallback ativado: o banco caiu, mas o usuário não percebe erro 500.
-        logger.warning("Redis Offline - Usando Fallback de Segurança", extra={'request_id': g.request_id})
+        # Falha registrada no breaker; após fail_max ele abre e para de bater no Redis.
+        breaker.record_failure()
+        logger.warning("Redis Offline - Circuit Breaker / Fallback", extra={'request_id': g.request_id})
         CACHE_METRICS.labels(result='fallback').inc()
         return generator_func(), 'fallback'
 
@@ -147,8 +202,8 @@ def handle_sigterm(*args):
     logger.info("Encerrando aplicação graciosamente (SIGTERM)...")
     sys.exit(0)
 
-signal.signal(signal.SIGTERM, handle_sigterm)
-
 if __name__ == '__main__':
-    # threaded=True habilita concorrência básica para o servidor de desenvolvimento.
+    # Apenas desenvolvimento local. Em container, o gunicorn (ver Dockerfile) gerencia
+    # o ciclo de vida e o graceful shutdown — por isso o handler só é registrado aqui.
+    signal.signal(signal.SIGTERM, handle_sigterm)
     app.run(host='0.0.0.0', port=5000, threaded=True)

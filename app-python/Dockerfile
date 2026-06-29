@@ -15,4 +15,6 @@ ENV PATH=/home/sreuser/.local/bin:$PATH
 EXPOSE 5000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD curl -f http://localhost:5000/health || exit 1
-CMD ["python", "app.py"]
+# Servidor WSGI de produção (gunicorn). 1 worker + threads mantém as métricas
+# Prometheus consistentes (processo único) e ainda atende concorrência.
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "1", "--threads", "4", "--timeout", "30", "--access-logfile", "-", "app:app"]

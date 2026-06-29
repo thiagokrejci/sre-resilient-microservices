@@ -17,8 +17,9 @@ Este projeto demonstra como construir uma arquitetura de microsserviços moderna
 
 ## 🚀 Filosofia de Engenharia
 Diferente de sistemas convencionais, este projeto foi desenhado sob o conceito de **"Produção Primeiro"**:
-- **Fail-Fast:** Timeouts agressivos para evitar contenção de recursos.
-- **Graceful Degradation:** Fallbacks automáticos para manter a experiência do usuário durante falhas de dependência.
+- **Servidor de produção:** o app Python roda sob **gunicorn** (WSGI), não no servidor de desenvolvimento do Flask.
+- **Fail-Fast:** Timeouts agressivos (1s) para evitar contenção de recursos.
+- **Graceful Degradation:** Circuit breaker + fallback automático mantêm a experiência do usuário durante falhas de dependência.
 - **Observability-First:** O sistema nasce instrumentado para monitoramento de percentis (p95/p99) e logs estruturados em JSON.
 
 ## ⚙️ Execução simplificada (Cross-platform)
@@ -30,11 +31,11 @@ Este projeto foi projetado para ser executado com o mínimo de esforço possíve
 *O Makefile atua como camada de abstração, adaptando automaticamente comandos conforme o SO.*
 
 ## 💎 Diferenciais de Nível SRE Sênior
-- **Circuit Breaker (Fallback):** Se o Redis falhar ou ficar lento, as APIs respondem imediatamente via fallback, evitando o efeito cascata.
-- **Security Hardening (TAAC):** Containers rodando como **non-root** e implementação de headers de segurança (`nosniff`, `X-Frame-Options`).
-- **FinOps (Gestão de Custo):** Quotas de CPU e Memória rigorosas impostas via orquestração para evitar o efeito "Noisy Neighbor".
-- **Golden Signals:** Coleta nativa de Latência, Tráfego, Erros e Saturação (Four Golden Signals do Google).
-- **Correlation ID:** Rastreabilidade fim-a-fim através do header `X-Request-ID`.
+- **Circuit Breaker real (máquina de estados):** `closed → open → half_open`. Após N falhas consecutivas o breaker **abre e para de bater no Redis** (evita efeito cascata) e, após cooldown, libera uma tentativa de teste. Estado exposto na métrica `circuit_breaker_open`.
+- **Security Hardening:** Containers **non-root** (multi-stage) e headers de segurança (`nosniff`, `X-Frame-Options`).
+- **FinOps (Gestão de Custo):** Limites de CPU e memória por serviço no `docker-compose` (`deploy.resources.limits`) para evitar o efeito "Noisy Neighbor".
+- **Golden Signals:** Latência (`http_request_duration_seconds`), Tráfego (`http_requests_total`), Erros (status nas labels) e **Saturação** (`http_inflight_requests` + métricas de processo/event-loop).
+- **Correlation ID:** Rastreabilidade fim-a-fim via header `X-Request-ID`.
 
 ## 📈 Monitoramento (Dashboard SRE)
 A stack já provisiona automaticamente um dashboard profissional no **Grafana**:
